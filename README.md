@@ -557,11 +557,13 @@ oc cp mas-manage-entitymgr-ws/roles/manage-deployment/action_plugins/routeManage
 Delete routes in mas-dev-manage
 
 ```
+instance=$(echo $namespace | cut -d"-" -f2)
+
 oc delete route -n $namespace \
-all-dev-manage-masdev-81 \
-dev-manage-masdev \
-erd-dev-manage-masdev-81 \
-maxinst-dev-manage-masdev-81
+all-$instance-manage-masdev-81 \
+$instance-manage-masdev \
+erd-$instance-manage-masdev-81 \
+maxinst-$instance-manage-masdev-81
 ```
 
 ## Troubleshooting
