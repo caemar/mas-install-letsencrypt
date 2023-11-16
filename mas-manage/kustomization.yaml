@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+configMapGenerator:
+  - name: mas-manage-letsencrypt
+    files:
+      - update-ansible.sh
+      - mas-manage-entitymgr-ws/roles/manage-deployment/action_plugins/routeManager.py
+
+resources:
+  - job.yaml
+  - cronjob.yaml

@@ -1,0 +1,258 @@
+---
+# tasks file for Workspace
+
+# Init (determine instanceId / configScope / configId etc)
+# -----------------------------------------------------------------------------
+- name: Initialize
+  include_tasks: tasks/init.yml
+
+- name: General Debug
+  debug:
+    msg:
+      - "Running Workspace Configuration"
+      - "Instance ID: ........... {{ instanceId }}"
+      - "Workspace ID: .......... {{ workspaceId  }}"
+      - "Display Name: .......... {{ displayName }}"
+      - "Workspace Settings: .... {{ workspaceSettings }}"
+      - "Finalizer............... {{ finalizer | default(False) }}"
+
+- name: Validate
+  include_tasks: tasks/validate.yml
+
+# Create reconcile configmap for this operator. Deleting it causes the operator
+# to reconcile.
+# -----------------------------------------------------------------------------
+- name: Create Workspace Operator reconcile configmap
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('template', 'templates/reconcileConfigMap.yml') }}"
+  register: createReconcileConfigmapResult
+
+- debug:
+    msg:
+      - "Workspace Reconcile ConfigMap changed ....... {{ createReconcileConfigmapResult.changed }}"
+
+# 1. Looking up details of resources
+# -----------------------------------------------------------------------------
+- name: Retrieve parent Suite.core.mas.ibm.com resource
+  include_tasks: tasks/lookup-suite.yml
+
+
+# 2. Creating a client certificate to use with MAS APIs
+# -----------------------------------------------------------------------------
+- name: Set up client authentication certificates for the MAS internal API
+  include_tasks: tasks/client-cert.yml
+
+
+# 3. Update the workspace in the database
+# -----------------------------------------------------------------------------
+- name: Workspace update
+  workspace_update:
+    workspaceId: "{{ workspaceId }}"
+    workspaceName: "{{ displayName }}"
+    workspaceSettings: "{{ workspaceSettings }}"
+    apiInternalUrl: "{{ apiInternalUrl }}"
+    delete: "{{ finalizer | default(False) }}"
+  register: updateResult
+  retries: 6
+  delay: 20
+  until: updateResult.success is defined and updateResult.success
+
+- name: Debug workspace update
+  debug:
+    var: updateResult
+
+- name: Update status and fail if the database update failed (don't fail on finalizer)
+  when:
+    - not updateResult.success
+    - finalizer is undefined
+  vars:
+    statusUpdate:
+      ready:
+        status: "False"
+        reason: "DatabaseUpdateFailed"
+        message: "{{ updateResult.error }}"
+  include_tasks: tasks/status-update.yml
+
+
+# 4. Create Route for workspace application navigator (home sub-domain)
+# -----------------------------------------------------------------------------
+
+- name: Get Internal certificate
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: "{{ certNames.internalHomepage }}"
+    namespace: "{{ coreNamespace }}"
+  register: internalCrtSecret
+
+- name: Get Public certificate
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: "{{ certNames.public }}"
+    namespace: "{{ coreNamespace }}"
+  register: publicCrtSecret
+
+- name: Update status and fail
+  when: internalCrtSecret['resources'] | length == 0 or publicCrtSecret['resources'] | length == 0
+  vars:
+    statusUpdate:
+      ready:
+        status: "False"
+        reason: "CertificateNotReady"
+        message: "Secret/{{ certNames.internalHomepage }} and/or Secret/{{ certNames.public }} are not available"
+  include_tasks: tasks/status-update.yml
+
+# Get existing routes to compare the domain and see if it is changing
+# -----------------------------------------------------------------------------
+- name: Get existing workspace route
+  kubernetes.core.k8s_info:
+    api_version: route.openshift.io/v1
+    kind: Route
+    name: "{{ instanceId }}-{{workspaceId}}-home"
+    namespace: "{{ coreNamespace }}"
+  register: existingWorkspaceRoute
+
+# We don't need to apply MAS public CA to the routes if is is a well known certificate
+- name: "Conditionally setting external CA certificate"
+  set_fact:
+    publicExternalCertificateAuthorityCertificate: "{{ publicCrtSecret.resources[0]['data']['ca.crt'] | b64decode }}"
+  when: publicCrtSecret.resources[0]['data']['ca.crt'] is defined
+
+# If the domain is changing, routes must be deleted so they can be recreated
+# -----------------------------------------------------------------------------
+- name: Delete existing routes if changing domain
+  vars:
+    internalCertificateAuthorityCertificate: "{{ internalCrtSecret.resources[0]['data']['ca.crt'] | b64decode }}"
+    externalCertificate: "{{ publicCrtSecret.resources[0]['data']['tls.crt'] | b64decode }}"
+    externalKey: "{{ publicCrtSecret.resources[0]['data']['tls.key'] | b64decode }}"
+    externalCertificateAuthorityCertificate: "{{ publicExternalCertificateAuthorityCertificate | default('') }}"
+  kubernetes.core.k8s:
+    state: absent
+    definition: "{{ lookup('template', 'templates/routes/workspace.yml') }}"
+  # when:
+  #   - existingWorkspaceRoute.resources | length > 0
+  #   - existingWorkspaceRoute.resources[0].status is defined
+  #   - existingWorkspaceRoute.resources[0].status.ingress is defined
+  #   - existingWorkspaceRoute.resources[0].status.ingress[0] is defined
+  #   - existingWorkspaceRoute.resources[0].status.ingress[0].host != '{{ homeDomain }}'
+
+- name: Setup Route
+  vars:
+    internalCertificateAuthorityCertificate: "{{ internalCrtSecret.resources[0]['data']['ca.crt'] | b64decode }}"
+    externalCertificate: "{{ publicCrtSecret.resources[0]['data']['tls.crt'] | b64decode }}"
+    externalKey: "{{ publicCrtSecret.resources[0]['data']['tls.key'] | b64decode }}"
+    externalCertificateAuthorityCertificate: "{{ publicExternalCertificateAuthorityCertificate | default('') }}"
+  kubernetes.core.k8s:
+    apply: yes
+    definition: "{{ lookup('template', 'templates/routes/ingress.yml') }}"
+    # definition: "{{ lookup('template', 'templates/routes/workspace.yml') }}"
+  when:
+    - internalCrtSecret['resources'] | length == 1
+    - publicCrtSecret['resources'] | length == 1
+  register: verifyRouteResult
+
+
+# 5. Updating workspace in OpenId
+# -----------------------------------------------------------------------------
+- name: OpenID Config
+  open_id_config:
+    workspaceId: "{{ workspaceId }}"
+    apiInternalUrl: "{{ apiInternalUrl }}"
+    clientId: "{{ oauthClientId }}"
+    homeDomain: "{{ homeDomain }}"
+    delete: "{{ finalizer | default(False) }}"
+  register: verifyOpenIdResult
+
+# Set owner references
+# -----------------------------------------------------------------------------
+- name: Set MAS public certificate as child of Workspace
+  include_role:
+    name: mas.util.update_owner_refs
+  vars:
+    forceParentReconcile: True
+    parentResource:
+      apiVersion: core.mas.ibm.com/v1
+      kind: Workspace
+      name: "{{ ansible_operator_meta.name }}"
+      namespace: "{{coreNamespace}}"
+    childResource:
+      apiVersion: cert-manager.io/v1
+      kind: Certificate
+      name: "{{ certNames.public }}"
+      namespace: "{{ coreNamespace }}"
+  when: not isManualCertMgmtEnabled
+
+# Set owner references for public cert secret when Manual Certificate mgmt is enabled.
+# Because certificate resource will not be present when manual mode is enabled.
+- name: Set MAS public certificate Secret as child of Workspace
+  include_role:
+    name: mas.util.update_owner_refs
+  vars:
+    forceParentReconcile: True
+    parentResource:
+      apiVersion: core.mas.ibm.com/v1
+      kind: Workspace
+      name: "{{ ansible_operator_meta.name }}"
+      namespace: "{{coreNamespace}}"
+    childResource:
+      apiVersion: v1
+      kind: secret
+      name: "{{ certNames.public }}"
+      namespace: "{{ coreNamespace }}"
+  when: isManualCertMgmtEnabled
+
+
+# 6. Check for a new deletion
+- name: Retrieve the latest workspace resource
+  kubernetes.core.k8s_info:
+    api_version: core.mas.ibm.com/v1
+    kind: Workspace
+    name: "{{ ansible_operator_meta.name }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+  register: workspaceLookupResult
+  when: finalizer is not defined
+
+- name: Report workspace deletion
+  debug:
+    msg: "Workspace CR deleted at {{workspaceLookupResult.resources[0].metadata.deletionTimestamp }}, so we'll run the finalizer"
+  when:
+    - workspaceLookupResult.resources[0].metadata.deletionTimestamp is defined
+
+- name: Run Finalize if needed
+  include_role:
+    name: workspace
+  vars:
+    finalizer: true
+  when:
+    - workspaceLookupResult.resources[0].metadata.deletionTimestamp is defined
+
+# 7. Update the status of the CR
+# -----------------------------------------------------------------------------
+- name: Update Workspace status
+  when: finalizer is not defined
+  vars:
+    statusUpdate:
+      ready:
+        status: "{{ False if updateResult.failed else True }}"
+        reason: "{{ 'DatabaseUpdateFailed' if updateResult.failed else 'Ready' }}"
+        message: "{{ 'Failed to update database record' if updateResult.failed else 'Workspace is ready' }}"
+  include_tasks: tasks/status-update.yml
+
+- name: Update Workspace status (on finalizer)
+  when: finalizer is defined
+  operator_sdk.util.k8s_status:
+    api_version: core.mas.ibm.com/v1
+    kind: Workspace
+    name: "{{ ansible_operator_meta.name }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+    status:
+      conditions:
+        - type: Removed
+          status: "True"
+          message: "Workspace database record has been deleted"
+          reason: "Removed"
+      versions:
+        reconciled: "{{ operatorVersion }}"
+        generation: "{{ selfLookupResult.resources[0].metadata.generation }}"

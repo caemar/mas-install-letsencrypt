@@ -1,0 +1,67 @@
+- name: Get Internal certificate
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: "{{ certNames.internalCoreIDP }}"
+    namespace: "{{ coreNamespace }}"
+  register: internalCrtSecret
+
+- name: Get Public certificate
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: "{{ certNames.public }}"
+    namespace: "{{ coreNamespace }}"
+  register: publicCrtSecret
+
+# We don't need to apply MAS public CA to the routes if is is a well known certificate
+- name: "Conditionally setting external CA certificate"
+  set_fact:
+    publicExternalCertificateAuthorityCertificate: "{{ publicCrtSecret.resources[0]['data']['ca.crt'] | b64decode }}"
+  when: publicCrtSecret.resources[0]['data']['ca.crt'] is defined
+
+# Get existing routes to compare the domain and see if it is changing
+# -----------------------------------------------------------------------------
+- name: Get existing coreidp routes
+  kubernetes.core.k8s_info:
+    api_version: route.openshift.io/v1
+    kind: Route
+    name: "{{ instanceId }}-auth"
+    namespace: "{{ coreNamespace }}"
+  register: existingCoreidpRoute
+
+# If the domain is changing, routes must be deleted so they can be recreated
+# -----------------------------------------------------------------------------
+- name: Delete existing coreidp routes if changing domain
+  vars:
+    internalCertificateAuthorityCertificate: "{{ internalCrtSecret.resources[0]['data']['ca.crt'] | b64decode }}"
+    externalCertificate: "{{ publicCrtSecret.resources[0]['data']['tls.crt'] | b64decode }}"
+    externalKey: "{{ publicCrtSecret.resources[0]['data']['tls.key'] | b64decode }}"
+    externalCertificateAuthorityCertificate: "{{ publicExternalCertificateAuthorityCertificate | default('') }}"
+  kubernetes.core.k8s:
+    state: absent
+    definition: "{{ lookup('template', 'templates/' + item) }}"
+  # when:
+  #   - existingCoreidpRoute.resources | length > 0
+  #   - existingCoreidpRoute.resources[0].status is defined
+  #   - existingCoreidpRoute.resources[0].status.ingress is defined
+  #   - existingCoreidpRoute.resources[0].status.ingress[0] is defined
+  #   - existingCoreidpRoute.resources[0].status.ingress[0].host != 'auth.{{ domain }}'
+  with_items:
+    - coreidp/route.yml
+    - coreidp-login/route.yml
+
+- name: Setup Routes
+  vars:
+    internalCertificateAuthorityCertificate: "{{ internalCrtSecret.resources[0]['data']['ca.crt'] | b64decode }}"
+    externalCertificate: "{{ publicCrtSecret.resources[0]['data']['tls.crt'] | b64decode }}"
+    externalKey: "{{ publicCrtSecret.resources[0]['data']['tls.key'] | b64decode }}"
+    externalCertificateAuthorityCertificate: "{{ publicExternalCertificateAuthorityCertificate | default('') }}"
+  kubernetes.core.k8s:
+    apply: yes
+    definition: "{{ lookup('template', 'templates/' + item) }}"
+  with_items:
+    - coreidp/ingress.yml
+    - coreidp-login/ingress.yml
+    # - coreidp/route.yml
+    # - coreidp-login/route.yml

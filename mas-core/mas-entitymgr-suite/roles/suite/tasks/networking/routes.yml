@@ -1,0 +1,89 @@
+---
+# 1. Lookup the secrets for the routes
+# -----------------------------------------------------------------------------
+- name: "routes : Get internal certificate"
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: "{{ certNames.internalAdminDashboard }}"
+    namespace: "{{ coreNamespace }}"
+  register: internalCrtSecret
+
+- name: "routes : Get public certificate"
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: "{{ certNames.public }}"
+    namespace: "{{ coreNamespace }}"
+  register: publicCrtSecret
+
+
+# 2. Failure conditions
+# -----------------------------------------------------------------------------
+- name: "routes : Fail if the certificates are not available"
+  when: internalCrtSecret['resources'] | length == 0 or publicCrtSecret['resources'] | length == 0
+  include_tasks: tasks/status-update.yml
+  vars:
+    statusUpdate:
+      ready:
+        status: "False"
+        reason: "CertificateNotReady"
+        message: "Secret/{{ certNames.public }} and/or Secret/{{ certNames.internalAdminDashboard }} are not yet available"
+
+# 3.1 We don't need to apply MAS public CA to the routes if is is a well known certificate
+# -----------------------------------------------------------------------------
+- name: "Conditionally setting external CA certificate"
+  set_fact:
+    publicExternalCertificateAuthorityCertificate: "{{ publicCrtSecret.resources[0]['data']['ca.crt'] | b64decode }}"
+  when: publicCrtSecret.resources[0]['data']['ca.crt'] is defined
+
+# 3.2 Get existing routes to compare the domain and see if it is changing
+# -----------------------------------------------------------------------------
+- name: Get existing admin route
+  kubernetes.core.k8s_info:
+    api_version: route.openshift.io/v1
+    kind: Route
+    name: "{{ instanceId }}-admin"
+    namespace: "{{ coreNamespace }}"
+  register: existingAdminRoute
+
+# 3.3 If the domain is changing, routes must be deleted so they can be recreated
+# -----------------------------------------------------------------------------
+- name: Delete existing routes if changing domain
+  vars:
+    internalCertificateAuthorityCertificate: "{{ internalCrtSecret.resources[0]['data']['ca.crt'] | b64decode }}"
+    externalCertificate: "{{ publicCrtSecret.resources[0]['data']['tls.crt'] | b64decode }}"
+    externalKey: "{{ publicCrtSecret.resources[0]['data']['tls.key'] | b64decode }}"
+    externalCertificateAuthorityCertificate: "{{ publicExternalCertificateAuthorityCertificate | default('') }}"
+  kubernetes.core.k8s:
+    state: absent
+    definition: "{{ lookup('template', 'templates/networking/routes.yml.j2') }}"
+  when:
+    - existingAdminRoute.resources | length > 0
+    - existingAdminRoute.resources[0].status is defined
+    - existingAdminRoute.resources[0].status.ingress is defined
+    - existingAdminRoute.resources[0].status.ingress[0] is defined
+    - existingAdminRoute.resources[0].status.ingress[0].host != 'admin.{{ domain }}'
+
+# 4 Setup the routes
+# -----------------------------------------------------------------------------
+- name: "routes : Apply all resource definitions"
+  vars:
+    internalCertificateAuthorityCertificate: "{{ internalCrtSecret.resources[0]['data']['ca.crt'] | b64decode }}"
+    externalCertificate: "{{ publicCrtSecret.resources[0]['data']['tls.crt'] | b64decode }}"
+    externalKey: "{{ publicCrtSecret.resources[0]['data']['tls.key'] | b64decode }}"
+    externalCertificateAuthorityCertificate: "{{ publicExternalCertificateAuthorityCertificate | default('') }}"
+  kubernetes.core.k8s:
+    apply: yes
+    definition: "{{ lookup('template', 'templates/networking/ingress.yml.j2') }}"
+    # definition: "{{ lookup('template', 'templates/networking/routes.yml.j2') }}"
+  register: createRoutesResult
+
+# 5. Debug the result from applying the resource defintion
+# -----------------------------------------------------------------------------
+- name: "routes : Debug result"
+  debug:
+    msg: "{{ '[changed=%-5s] %s/%s' | format(item.changed, item.result.kind, item.result.metadata.name) }}"
+  loop: "{{ createRoutesResult.result.results }}"
+  loop_control:
+    label: "{{item.result.metadata.name}}"

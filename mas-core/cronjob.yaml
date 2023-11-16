@@ -1,0 +1,34 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: mas-install-letsencrypt
+spec:
+  schedule: "*/5 * * * *" # run every 5 minutes
+  successfulJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        spec:
+          restartPolicy: Never
+          serviceAccountName: ibm-mas-entitymgr-coreidp
+          containers:
+            - image: registry.redhat.io/openshift4/ose-cli
+              name: oc-cli
+              command:
+                - sh
+                - /scripts/update-ansible.sh
+              securityContext:
+                allowPrivilegeEscalation: false
+                runAsNonRoot: true
+                capabilities:
+                  drop: ["ALL"]
+                seccompProfile:
+                  type: RuntimeDefault
+              volumeMounts:
+                - name: scripts
+                  mountPath: /scripts
+          volumes:
+            - name: scripts
+              configMap:
+                name: mas-core-letsencrypt
