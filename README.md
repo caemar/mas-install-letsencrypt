@@ -10,7 +10,7 @@ The steps in this document describes to:
 - Create Role and RoleBinding to allow Ingress creation
 - Replace Routes with Ingress that have letscrypt certificate
 
-All steps must be executed in both Namespaces mas-_instance_-core and mas-_instance_-manage excpept for the cluster resource ClusterIssuer.
+All steps must be executed in both Namespaces mas-_instance_-core and mas-_instance_-manage except for the cluster resource ClusterIssuer.
 
 This document includes modified ansible scripts that replace ansible scripts in the operators. The modified ansible scripts with create Ingress instead Routes.
 
