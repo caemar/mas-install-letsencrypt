@@ -1,4 +1,4 @@
-# MAS patch to replace Routes with Ingress
+# MAS patch to replace Routes with Ingress and letsencrypt signed certificates
 
 In IBM Cloud the cert-manager with letsencrypt dns solver is not supported. Only the http solver is able to create signed certificates.
 
@@ -141,7 +141,7 @@ EOF
 
 Modify operator ansible scripts.
 
-The following job changes the ansible scripts in the operators to create Ingress with signed letsencrypt certificates instead of Routes. The job will also delete exising Routes. A cronjob will continuously update the ansible scripts in order to keep creating Ingress also after updates to the operators.
+The following `oc apply -k` creates a Job and CronJob that change the ansible scripts in the operators to create Ingress with signed letsencrypt certificates instead of Routes. The Job will also delete exising Routes. A CronJob will continuously update the ansible scripts in order to keep creating Ingress also after updates to the operators.
 
 ```
 namespace=mas-dev-core
@@ -157,7 +157,7 @@ oc apply -k https://github.com/caemar/mas-install-letsencrypt/mas-core -n $names
 oc apply -k mas-install-letsencrypt/mas-core -n $namespace
 ```
 
-Note: The job and cronjob also deletes exiting Routes in the mas-_instance_-core Namespace.
+Note: The Job and CronJob also delete exiting Routes in the mas-_instance_-core Namespace.
 
 ## Add required Role and Rolebinding in mas-_instance_-manage Namespace
 
@@ -222,7 +222,7 @@ EOF
 
 Modify operator ansible scripts.
 
-The following `oc apply -k` creates a Job and CronJob that changes the ansible scripts in the operators to create Ingress with signed letscrypt certificates instead of Routes. The Job will also delete exising Routes. A CronJob will continuously update the ansible scripts in order to keep creating Ingress also after updates to the operators.
+The following `oc apply -k` creates a Job and CronJob that change the ansible scripts in the operators to create Ingress with signed letscrypt certificates instead of Routes. The Job will also delete exising Routes. A CronJob will continuously update the ansible scripts in order to keep creating Ingress also after updates to the operators.
 
 ```
 namespace=mas-dev-manage
@@ -238,7 +238,7 @@ oc apply -k https://github.com/caemar/mas-install-letsencrypt/mas-manage -n $nam
 oc apply -k mas-install-letsencrypt/mas-manage -n $namespace
 ```
 
-Note: The job and cronjob also deletes exiting Routes in the mas-dev-core Namespace.
+Note: The Job and CronJob also delete exiting Routes in the mas-_instance_-manage Namespace.
 
 ## Uninstall Ingress and restore operators
 
@@ -274,7 +274,7 @@ Note: Deleting the operator Pods will recreate the original operators and Routes
 
 ## Reference
 
-For reference the following steps describes how to retrieve the ansible scriptps from the operator and to modify the scripts to replace a Route with Ingress. The ingress uses the letencrypt ClusterIssuer to create signed certificates.
+For reference the following steps describes how to retrieve the ansible scriptps from the operator and to modify the scripts to replace a Route with Ingress. The Ingress uses the letencrypt ClusterIssuer to create signed certificates.
 
 1. Retrieve operators ansible scripts from entitymgr Pods.
 
@@ -312,15 +312,32 @@ done
 
 2. Modify ansible scripts to use Ingress
 
-The ansible script are modified to create Ingress instead Routes.
+The ansible scripts are modified to create Ingress instead Routes.
 
-The Ingress are configured to `reencrypt` incoming traffic. The tls is terminated at the Route with an signed letsencrypt certifcate. Then the traffic forwarded to the interal service using tls with an internal ca certificate. The internal ca certificate must be stored in tls.crt file in a secret and specified in the Ingress annotation `route.openshift.io/destination-ca-certificate-secret`.
+```
+mas-entitymgr-coreidp/roles/coreidp/tasks/routes.yml
+mas-entitymgr-coreidp/roles/coreidp/templates/coreidp/ingress.yml
+mas-entitymgr-coreidp/roles/coreidp/templates/coreidp-login/ingress.yml
+
+mas-entitymgr-suite/roles/suite/tasks/networking/routes.yml
+mas-entitymgr-suite/roles/suite/templates/networking/ingress.yml.j2
+mas-entitymgr-suite/roles/suite/templates/networking/ingress/admin.yml
+mas-entitymgr-suite/roles/suite/templates/networking/ingress/api.yml
+mas-entitymgr-suite/roles/suite/templates/networking/ingress/home.yml
+
+mas-entitymgr-ws/roles/workspace/tasks/main.yml
+mas-entitymgr-ws/roles/workspace/templates/routes/ingress.yml
+
+mas-manage-entitymgr-ws/roles/manage-deployment/action_plugins/routeManager.py
+```
+
+The Ingress are configured to `reencrypt` incoming traffic. The tls is terminated at the Route with a signed letsencrypt certifcate. Then the traffic is forwarded to the internal service using tls with an internal ca certificate. The internal ca certificate must be stored in the tls.crt file in a secret and specified in the Ingress annotation `route.openshift.io/destination-ca-certificate-secret`.
 
 https://docs.openshift.com/container-platform/4.12/networking/routes/route-configuration.html#nw-ingress-creating-a-route-via-an-ingress_route-configuration
 
-Note: In the Ingress the ClusterIssuer name `letsencrypt` is assumed. Some effort would be required to make the name variable. Also, further improvements would allow to configure a choice between Route and Ingress.
+Note: In the Ingress the ClusterIssuer name `letsencrypt` is assumed. Some effort would be required to make this name variable. Also, further improvements would allow to configure a choice between Route and Ingress.
 
-In Namespace mas-_instance_-core the secret _instance_-cert-internal-ca contains a tls.crt file with the internal ca certificate. In Namespace mas-_instance_-manage a new secret cert-internal-ca is created with a tls.crt file that is copied from the ca.crt file in secret _instance_-internal-manage-tls.
+In Namespace mas-_instance_-core the secret _instance_-cert-internal-ca contains a tls.crt file with the internal ca certificate. However, in Namespace mas-_instance_-manage a new secret cert-internal-ca is created with a tls.crt file that is copied from the ca.crt file in secret _instance_-internal-manage-tls.
 
 ```sh
 # copy ca.crt from $instance-internal-manage-tls
@@ -336,9 +353,9 @@ oc create secret generic cert-internal-ca \
 | oc apply -f -
 ```
 
-New Ingress with signed letsencrypt certificates
+New Ingress with signed letsencrypt certificates and label `ingress: letsencrypt`
 
-/opt/ansible/roles/coreidp/templates/coreidp/ingress.yml
+Example: /opt/ansible/roles/coreidp/templates/coreidp/ingress.yml
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -350,6 +367,7 @@ metadata:
     route.openshift.io/termination: "reencrypt"
     route.openshift.io/destination-ca-certificate-secret: "{{ certNames.internalCoreIDP }}"
   labels:
+    ingress: letsencrypt
     mas.ibm.com/instanceId: "{{ instanceId }}"
     app.kubernetes.io/instance: "{{ instanceId }}"
     app.kubernetes.io/managed-by: "{{ operatorName }}"
@@ -377,7 +395,7 @@ spec:
 
 Old Route with selfsigned certificates
 
-/opt/ansible/roles/coreidp/templates/coreidp/route.yml
+Example: /opt/ansible/roles/coreidp/templates/coreidp/route.yml
 
 ```yaml
 apiVersion: route.openshift.io/v1
