@@ -157,7 +157,7 @@ oc apply -k https://github.com/caemar/mas-install-letsencrypt/mas-core -n $names
 oc apply -k mas-install-letsencrypt/mas-core -n $namespace
 ```
 
-Note: The Job and CronJob also delete exiting Routes in the mas-_instance_-core Namespace.
+Note: The Job and CronJob also delete existing Routes in the mas-_instance_-core Namespace.
 
 ## Add required Role and Rolebinding in mas-_instance_-manage Namespace
 
@@ -238,7 +238,7 @@ oc apply -k https://github.com/caemar/mas-install-letsencrypt/mas-manage -n $nam
 oc apply -k mas-install-letsencrypt/mas-manage -n $namespace
 ```
 
-Note: The Job and CronJob also delete exiting Routes in the mas-_instance_-manage Namespace.
+Note: The Job and CronJob also delete existing Routes in the mas-_instance_-manage Namespace.
 
 ## Uninstall Ingress and restore operators
 
