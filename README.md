@@ -4,6 +4,9 @@ In IBM Cloud the cert-manager with letsencrypt dns solver is not supported. Only
 
 This document describes to enable manual certificate management in MAS. The cert-manager will create letsencrypt Certificates that are stored in Secrets. MAS will then use the Certificates from the Secrets.
 
+- MAS version: 8.11.2
+- OpenShift version: 4.12
+
 https://www.ibm.com/docs/en/mas-cd/continuous-delivery?topic=management-manual-certificate
 
 This document describes to:
