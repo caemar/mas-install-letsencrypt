@@ -6,7 +6,7 @@ This document describes to enable manual certificate management in MAS. The cert
 
 https://www.ibm.com/docs/en/mas-cd/continuous-delivery?topic=management-manual-certificate
 
-The steps in this document describes to:
+This document describes to:
 - Create letsencrypt ClusterIssuer with http solver
 - Create NetworkPolicy to allow connections to cert-manager solver Pods
 - Enable manual certificate management (`spec.settings.manualCertMgmt` = `true`)
