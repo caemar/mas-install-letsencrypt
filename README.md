@@ -1,4 +1,4 @@
-# MAS patch to replace Routes with Ingress and letsencrypt signed certificates
+# MAS Manual certificate management with letsencrypt
 
 In IBM Cloud the cert-manager with letsencrypt dns solver is not supported. Only the http solver is able to create signed certificates.
 
@@ -7,12 +7,22 @@ Replace Routes with Ingress to allow using a letsencrypt ClusterIssuer to create
 The steps in this document describes to:
 - Create letsencrypt ClusterIssuer with http solver
 - Create NetworkPolicy to allow connections to cert-manager solver Pods
-- Create Role and RoleBinding to allow Ingress creation
-- Replace Routes with Ingress that have letscrypt certificate
+- Create letsencrypt signed certificates that are stored in Secrets:
+  - Namespace mas-_instance_-core
+    - Secret _instance_-cert-public
+  - Namespace mas-_instance_-manage
+    - Secret _instance_-_workspace_-cert-public-81
 
 All steps must be executed in both Namespaces mas-_instance_-core and mas-_instance_-manage except for the cluster resource ClusterIssuer.
 
-This document includes modified ansible scripts that replace ansible scripts in the operators. The modified ansible scripts with create Ingress instead Routes.
+https://www.ibm.com/docs/en/mas-cd/continuous-delivery?topic=management-manual-certificate
+
+The scripts following creates the required ClusterIssuer, NetworkPolicy and Certificate. Provide the target Namespace name mas-_instance_-core and mas-_instance_-manage to the scripts.
+
+```
+./crt_mas_core.sh mas-dev-core
+./crt_mas_manage.sh mas-dev-manage
+```
 
 ## Create letsencrypt ClusterIssuer
 
@@ -34,8 +44,6 @@ spec:
           class: openshift-default
 EOF
 ```
-
-Note: The ClusterIssuer name must be `letsencrypt` because this name is used in the following steps when creating the Ingress.
 
 ## Create NetworkPolicy to allow cert-manger http solver Pods to be reachable
 
@@ -72,540 +80,229 @@ EOF
 
 Note: Create the NetworkPolicy in both Namespaces.
 
-## Add required Role and Rolebinding in mas-_instance_-core Namespace
-
-The following Role and RoleBinding is required to create Ingress and to update ansible scripts in operator Pods.
+## In Namespace mas-_instance_-core
 
 ```
 namespace=mas-dev-core
 ```
 
+```
+instance=$(echo $namespace | cut -d"-" -f2)
+workspace=$(oc get workspace -n $namespace \
+            -o jsonpath='{ ..metadata.labels.mas\.ibm\.com/workspaceId }')
+```
+
+Check certificates
+
+```
+for host in $(oc get route -n $namespace -o jsonpath='{ ..spec.host }')
+do
+echo "------------------------------ $host ------------------------------"
+openssl s_client -connect $host:443 < /dev/null 2>/dev/null | \
+openssl x509 -noout -issuer -subject -enddate -ext subjectAltName
+done
+```
+
+```
+oc get secret \
+-n $namespace $instance-cert-public -o jsonpath='{ .data.tls\.crt }' | base64 -d | \
+openssl x509 -noout -issuer -subject -enddate -ext subjectAltName
+```
+
+Enable manual certificate management
+
+https://www.ibm.com/docs/en/mas-cd/continuous-delivery?topic=management-enabling-manual-certificate
+
+```
+oc get suite $instance -n $namespace -o jsonpath='{ .spec.settings.manualCertMgmt }'
+```
+
+In the spec.settings section, change the manualCertMgmt variable from false to true.
+
+```
+oc patch suite $instance -n $namespace \
+--type merge \
+-p '{ "spec": { "settings": { "manualCertMgmt": true }}}'
+```
+
+Create letsencrypt certificate in secret _instance_-cert-public
+
+https://www.ibm.com/docs/en/mas-cd/continuous-delivery?topic=management-manual-certificate
+
+https://www.ibm.com/docs/en/mas-cd/continuous-delivery?topic=management-uploading-public-certificates-in-red-hat-openshift
+
 ```yaml
+appsdomain=$(oc get ingresses.config/cluster -o jsonpath='{ .spec.domain }')
+
 cat << EOF | oc create -f -
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
+apiVersion: cert-manager.io/v1
+kind: Certificate
 metadata:
-  name: ibm-mas-entitymgr-ingress
+  name: letsencrypt-$instance-cert-public
   namespace: $namespace
-rules:
-- apiGroups:
-  - networking.k8s.io
-  resources:
-  - ingresses
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - ""
-  resources:
-  - pods
-  - pods/exec
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: ibm-mas-entitymgr-ingress
-  namespace: $namespace
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: ibm-mas-entitymgr-ingress
-subjects:
-- kind: ServiceAccount
-  name: ibm-mas-entitymgr-coreidp
-  namespace: $namespace
-- kind: ServiceAccount
-  name: ibm-mas-entitymgr-suite
-  namespace: $namespace
-- kind: ServiceAccount
-  name: ibm-mas-entitymgr-ws
-  namespace: $namespace
+spec:
+  secretName: $instance-cert-public
+  issuerRef:
+    name: letsencrypt
+    kind: ClusterIssuer
+  dnsNames:
+    - $instance.$appsdomain
+    - admin.$instance.$appsdomain
+    - api.$instance.$appsdomain
+    - auth.$instance.$appsdomain
+    - home.$instance.$appsdomain
+    - $workspace.home.$instance.$appsdomain
 EOF
 ```
 
-## Modify operator ansible scripts in mas-_instance_-core Namespace
-
-Modify operator ansible scripts.
-
-The following `oc apply -k` creates a Job and CronJob that change the ansible scripts in the operators to create Ingress with signed letsencrypt certificates instead of Routes. The Job will also delete existing Routes. A CronJob will continuously update the ansible scripts in order to keep creating Ingress also after updates to the operators.
+Check status if letsencrypt solver Pods run successful
 
 ```
-namespace=mas-dev-core
-```
-
-```
-oc apply -k https://github.com/caemar/mas-install-letsencrypt/mas-core -n $namespace
-```
-
--or- run git clone and oc apply
-
-```
-oc apply -k mas-install-letsencrypt/mas-core -n $namespace
-```
-
-Note: The Job and CronJob also delete existing Routes in the mas-_instance_-core Namespace.
-
-## Add required Role and Rolebinding in mas-_instance_-manage Namespace
-
-The following Role and RoleBinding are required to create Ingress and to update ansible scripts in operator Pods.
-
-```
-namespace=mas-dev-manage
-```
-
-```yaml
-cat << EOF | oc create -f -
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: ibm-mas-manage-ingress
-  namespace: $namespace
-rules:
-- apiGroups:
-  - networking.k8s.io
-  resources:
-  - ingresses
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - ""
-  resources:
-  - pods
-  - pods/exec
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: ibm-mas-manage-ingress
-  namespace: $namespace
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: ibm-mas-manage-ingress
-subjects:
-- kind: ServiceAccount
-  name: ibm-mas-manage-ws-operator
-  namespace: $namespace
-EOF
-```
-
-## Modify operator ansible scripts in mas-_instance_-manage Namespace
-
-Modify operator ansible scripts.
-
-The following `oc apply -k` creates a Job and CronJob that change the ansible scripts in the operators to create Ingress with signed letsencrypt certificates instead of Routes. The Job will also delete exising Routes. A CronJob will continuously update the ansible scripts in order to keep creating Ingress also after updates to the operators.
-
-```
-namespace=mas-dev-manage
-```
-
-```
-oc apply -k https://github.com/caemar/mas-install-letsencrypt/mas-manage -n $namespace
-```
-
--or- run git clone and oc apply
-
-```
-oc apply -k mas-install-letsencrypt/mas-manage -n $namespace
-```
-
-Note: The Job and CronJob also delete existing Routes in the mas-_instance_-manage Namespace.
-
-## Uninstall Ingress and restore operators
-
-```
-namespace=mas-dev-core
-```
-
-```
-instance=$(echo $namespace | cut -d"-" -f2)
-
-oc delete -k mas-install-letsencrypt/mas-core -n $namespace
-
-oc delete pod \
--l "app in ($instance-entitymgr-coreidp,$instance-entitymgr-suite,$instance-entitymgr-ws)" \
--n $namespace
-
-oc delete ingress -n $namespace --all
-```
-
-```
-namespace=mas-dev-manage
-```
-
-```
-oc delete -k mas-install-letsencrypt/mas-manage -n $namespace
-
-oc delete pod -l mas.ibm.com/appType=entitymgr-ws-operator -n $namespace
-
-oc delete ingress -n $namespace --all
-```
-
-Note: Deleting the operator Pods will recreate the original operators and Routes.
-
-## Reference
-
-For reference the following steps describes how to retrieve the ansible scriptps from the operators and to modify the scripts to replace a Route with Ingress. The Ingress uses the letencrypt ClusterIssuer to create signed certificates.
-
-1. Retrieve operators ansible scripts from entitymgr Pods.
-
-Note: The following commands retrieve the ansible scripts from all entitymgr Pods. But the ansible scripts are only modified in the following Pods:
-- Namespace mas-_instance_-core
-  - _instance_-entitymgr-coreidp
-  - _instance_-entitymgr-suite
-  - _instance_-entitymgr-ws
-- Namespace mas-_instance_-manage
-  - _instance_-entitymgr-ws
-
-```
-namespace=mas-dev-core
-```
-
-```
-for i in \
-$(oc get pod -n $namespace -l mas.ibm.com/appType=entitymgr -o jsonpath='{..metadata.name}')
-do
-j=$(echo $i | cut -d"-" -f3)
-echo $i
-mkdir -p mas-entitymgr-$j
-oc cp -n $namespace ${i}:/opt/ansible/ mas-entitymgr-$j
-rm -rf mas-entitymgr-$j/.bash_history
-find mas-entitymgr-$j -name "*.pyc" -exec rm {} +
-done
-```
-
-```
-namespace=mas-dev-manage
-```
-
-```
-for i in \
-$(oc get pod -n $namespace \
--l mas.ibm.com/appType=entitymgr-ws-operator -o jsonpath='{..metadata.name}')
-do
-j=$(echo $i | cut -d"-" -f3)
-echo $i
-mkdir -p mas-manage-entitymgr-$j
-oc exec -n $namespace $i -- tar cf - -C /opt/ansible ./ | tar -xf - -C mas-manage-entitymgr-$j
-rm -rf mas-manage-entitymgr-$j/.bash_history
-find mas-manage-entitymgr-$j -name "*.pyc" -exec rm {} +
-done
-```
-
-2. Modify ansible scripts to use Ingress
-
-The ansible scripts are modified to create Ingress instead Routes.
-
-```
-mas-entitymgr-coreidp/roles/coreidp/tasks/routes.yml
-mas-entitymgr-coreidp/roles/coreidp/templates/coreidp/ingress.yml
-mas-entitymgr-coreidp/roles/coreidp/templates/coreidp-login/ingress.yml
-
-mas-entitymgr-suite/roles/suite/tasks/networking/routes.yml
-mas-entitymgr-suite/roles/suite/templates/networking/ingress.yml.j2
-mas-entitymgr-suite/roles/suite/templates/networking/ingress/admin.yml
-mas-entitymgr-suite/roles/suite/templates/networking/ingress/api.yml
-mas-entitymgr-suite/roles/suite/templates/networking/ingress/home.yml
-
-mas-entitymgr-ws/roles/workspace/tasks/main.yml
-mas-entitymgr-ws/roles/workspace/templates/routes/ingress.yml
-
-mas-manage-entitymgr-ws/roles/manage-deployment/action_plugins/routeManager.py
-```
-
-The Ingress is configured to `reencrypt` incoming traffic. The tls is terminated at the Route with a signed letsencrypt certifcate. Then the traffic is forwarded to the internal service using tls that is signed with an internal ca certificate. The internal ca certificate must be stored in the tls.crt file in a secret cert-internal-ca and specified in the Ingress annotation `route.openshift.io/destination-ca-certificate-secret: cert-internal-ca`.
-
-https://docs.openshift.com/container-platform/4.12/networking/routes/route-configuration.html#nw-ingress-creating-a-route-via-an-ingress_route-configuration
-
-Note: In the Ingress the ClusterIssuer name `letsencrypt` is assumed. Some effort would be required to make this name variable. Also, further improvements would allow to configure a choice between Route and Ingress.
-
-In Namespace mas-_instance_-core the secret _instance_-cert-internal-ca contains a tls.crt file with the internal ca certificate. However, in Namespace mas-_instance_-manage a new secret cert-internal-ca is created with a tls.crt file that is copied from the ca.crt file in secret _instance_-internal-manage-tls.
-
-```sh
-# copy ca.crt from $instance-internal-manage-tls
-# into tls.crt in new secret cert-inernal-ca
-cacrt=$(oc get secret $instance-internal-manage-tls \
-                    -n $namespace \
-                    -o jsonpath='{ .data.ca\.crt }' \
-                    | base64 -d)
-oc create secret generic cert-internal-ca \
--n $namespace \
---from-literal tls.crt="$cacrt" \
---dry-run=client -o yaml \
-| oc apply -f -
-```
-
-New Ingress with signed letsencrypt certificates and label `ingress: letsencrypt`
-
-Example: /opt/ansible/roles/coreidp/templates/coreidp/ingress.yml
-
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  annotations:
-    # add an annotation indicating the issuer to use.
-    cert-manager.io/cluster-issuer: letsencrypt
-    route.openshift.io/termination: "reencrypt"
-    route.openshift.io/destination-ca-certificate-secret: "{{ certNames.internalCoreIDP }}"
-  labels:
-    ingress: letsencrypt
-    mas.ibm.com/instanceId: "{{ instanceId }}"
-    app.kubernetes.io/instance: "{{ instanceId }}"
-    app.kubernetes.io/managed-by: "{{ operatorName }}"
-    app.kubernetes.io/name: ibm-mas
-  name: "{{ instanceId }}-auth"
-  namespace: "{{ coreNamespace }}"
-spec:
-  rules:
-  - host: "auth.{{ domain }}"
-    http:
-      paths:
-      - pathType: Prefix
-        path: /
-        backend:
-          service:
-            name: coreidp
-            port:
-              name: coreidp
-  tls:
-  - hosts:
-    - "{{ domain }}"
-    - "auth.{{ domain }}"
-    secretName:  "letsencrypt-{{ instanceId }}-auth"
-```
-
-Old Route with selfsigned certificates
-
-Example: /opt/ansible/roles/coreidp/templates/coreidp/route.yml
-
-```yaml
-apiVersion: route.openshift.io/v1
-kind: Route
-metadata:
-  name: "{{ instanceId }}-auth"
-  namespace: "{{ coreNamespace }}"
-  labels:
-    mas.ibm.com/instanceId: "{{ instanceId }}"
-    app.kubernetes.io/instance: "{{ instanceId }}"
-    app.kubernetes.io/managed-by: "{{ operatorName }}"
-    app.kubernetes.io/name: ibm-mas
-  annotations:
-    haproxy.router.openshift.io/proxy-connect-timeout: "300s"
-    haproxy.router.openshift.io/proxy-read-timeout: "300s"
-    haproxy.router.openshift.io/timeout: "300s"
-spec:
-  host: "auth.{{ domain }}"
-  path: /
-  to:
-    kind: Service
-    name: coreidp
-    weight: 100
-  port:
-    targetPort: coreidp
-  tls:
-    termination: reencrypt
-    certificate: |
-      {{ externalCertificate | indent(6, False) }}
-    key: |
-      {{ externalKey | indent(6, False) }}
-    caCertificate: |
-      {{ externalCertificateAuthorityCertificate | indent(6, False) }}
-    destinationCACertificate: |
-      {{ internalCertificateAuthorityCertificate | indent(6, False) }}
-  wildcardPolicy: None
-```
-
-3. Replace ansible scripts in operator Pods
-
-```
-namespace=mas-dev-core
-instance=$(echo $namespace | cut -d"-" -f2)
-```
-
-Optional: Get conatainer image shasum
-
-```
-namespace=mas-dev-core
-
-for i in \
-$(oc get pod -l mas.ibm.com/appType=entitymgr -n $namespace -o jsonpath='{..metadata.name}')
-do
-j=$(echo $i | cut -d"-" -f1-3)
-echo $i
-oc get pod -n $namespace $i -o jsonpath='{ .status.containerStatuses[0].image  } '
-echo $j
-done
-```
-
-Replace ansible scripts in operators
-
-```
-namespace=mas-dev-core
-```
-
-```
-instance=$(echo $namespace | cut -d"-" -f2)
-app=$instance-entitymgr-coreidp
-
-for pod in $(oc get pod -l app=$app -n $namespace -o jsonpath='{..metadata.name}')
-do
-for i in \
-roles/coreidp/tasks/routes.yml \
-roles/coreidp/templates/coreidp-login/ingress.yml \
-roles/coreidp/templates/coreidp/ingress.yml
-do
-echo /opt/ansible/$i
-oc cp mas-entitymgr-coreidp/$i -n $namespace $pod:/opt/ansible/$i
-done
-done
-
-app=$instance-entitymgr-suite
-
-for pod in $(oc get pod -l app=$app -n $namespace -o jsonpath='{..metadata.name}')
-do
-for i in \
-roles/suite/tasks/networking/routes.yml \
-roles/suite/templates/networking/ingress.yml.j2 \
-roles/suite/templates/networking/ingress
-do
-echo /opt/ansible/$i
-oc cp mas-entitymgr-suite/$i -n $namespace $pod:/opt/ansible/$i
-done
-done
-
-app=$instance-entitymgr-ws
-
-for pod in $(oc get pod -l app=$app -n $namespace -o jsonpath='{..metadata.name}')
-do
-for i in \
-roles/workspace/tasks/main.yml \
-roles/workspace/templates/routes/ingress.yml
-do
-echo /opt/ansible/$i
-oc cp mas-entitymgr-ws/$i -n $namespace $pod:/opt/ansible/$i
-done
-done
-```
-
-Delete Routes
-
-```
-namespace=mas-dev-core
-```
-
-```
-instance=$(echo $namespace | cut -d"-" -f2)
-
-for i in \
-$(oc get route -n $namespace \
-$instance-admin \
-$instance-api \
-$instance-auth \
-$instance-home \
-$instance-masdev-home \
--o name 2>/dev/null)
-do
-oc delete $i -n $namespace
-done
-
+oc get pod -n $namespace --sort-by .metadata.creationTimestamp
 oc get route -n $namespace
+oc get cert letsencrypt-$instance-cert-public -n $namespace
 ```
 
-Replace ansible in mas-dev-manage
+Check certificates again
 
 ```
-namespace=mas-dev-manage
-```
-
-```
-pod=$(oc get pod -n $namespace -l mas.ibm.com/appType=entitymgr-ws-operator -o name)
-
-oc cp mas-manage-entitymgr-ws/roles/manage-deployment/action_plugins/routeManager.py \
--n $namespace $pod:/opt/ansible/roles/manage-deployment/action_plugins/routeManager.py
-```
-
-Delete routes in mas-dev-manage
-
-```
-instance=$(echo $namespace | cut -d"-" -f2)
-
-oc delete route -n $namespace \
-all-$instance-manage-masdev-81 \
-$instance-manage-masdev \
-erd-$instance-manage-masdev-81 \
-maxinst-$instance-manage-masdev-81
-```
-
-## Troubleshooting
-
-```
-namespace=mas-dev-core
+for host in $(oc get route -n $namespace -o jsonpath='{ ..spec.host }')
+do
+echo "------------------------------ $host ------------------------------"
+openssl s_client -connect $host:443 < /dev/null 2>/dev/null | \
+openssl x509 -noout -issuer -subject -enddate -ext subjectAltName
+done
 ```
 
 ```
-instance=$(echo $namespace | cut -d"-" -f2)
-app=$instance-entitymgr-coreidp
+for route in  $(oc get route -n $namespace -o jsonpath='{ ..metadata.name }')
+do
+echo "------------------------------ $route ------------------------------"
+oc get route $route -n $namespace -o jsonpath='{ .spec.tls.certificate }' | \
+openssl x509 -noout -issuer -subject -enddate -ext subjectAltName
+done
 ```
 
 ```
-app=$instance-entitymgr-suite
+oc get secret \
+-n $namespace $instance-cert-public -o jsonpath='{ .data.tls\.crt }' | base64 -d | \
+openssl x509 -noout -issuer -subject -enddate -ext subjectAltName
 ```
 
-```
-app=$instance-entitymgr-ws
-```
+Check that Routes respond with code 404, 301 or 302. A code 503 indicates a wrong ca certificate in the Ingress.
 
 ```
-oc logs -n $namespace -l app=$app --tail 5 -f
+for url in \
+$(oc get route -n $namespace \
+-o jsonpath='{ range @.items[*] }{ .spec.host }{ .spec.path } { end }')
+do
+  curl https://$url -o /dev/null -s -w '%{http_code} '
+  echo https://$url
+done
 ```
 
-```
-oc logs -n $namespace job/mas-install-letsencrypt
-```
+Note: Run curl without -k to check signed certificate.
+
+## In Namespace mas-_instance_-manage
 
 ```
 namespace=mas-dev-manage
 ```
 
 ```
-oc logs -n $namespace -l mas.ibm.com/appType=entitymgr-ws-operator --tail 5 -f
+instance=$(echo $namespace | cut -d"-" -f2)
+workspace=$(oc get pod -n $namespace \
+            -l mas.ibm.com/appTypeName=all \
+            -o jsonpath='{ .items[].metadata.labels.mas\.ibm\.com/workspaceId }')
+
+```
+
+Check certificates
+
+```
+for host in $(oc get route -n $namespace -o jsonpath='{ ..spec.host }')
+do
+echo "------------------------------ $host ------------------------------"
+openssl s_client -connect $host:443 < /dev/null 2>/dev/null | \
+openssl x509 -noout -issuer -subject -enddate -ext subjectAltName
+done
 ```
 
 ```
-oc logs -n $namespace job/mas-install-letsencrypt
+oc get secret \
+-n $namespace $instance-$workspace-cert-public-81 \
+-o jsonpath='{ .data.tls\.crt }' | base64 -d | \
+openssl x509 -noout -issuer -subject -enddate -ext subjectAltName
 ```
 
-Check that Routes respond with code 404, 301 or 302. A code 503 indicates a wrong ca certificate in the Ingress. 
+Create letsencrypt certificate in secret _instance_-_workspace_-cert-public-81
+
+https://www.ibm.com/docs/en/mas-cd/continuous-delivery?topic=management-manual-certificate
+
+https://www.ibm.com/docs/en/mas-cd/continuous-delivery?topic=management-uploading-public-certificates-in-red-hat-openshift
+
+```yaml
+appsdomain=$(oc get ingresses.config/cluster -o jsonpath='{ .spec.domain }')
+
+cat << EOF | oc create -f -
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: letsencrypt-$instance-$workspace-cert-public-81
+  namespace: $namespace
+spec:
+  secretName: $instance-$workspace-cert-public-81
+  issuerRef:
+    name: letsencrypt
+    kind: ClusterIssuer
+  dnsNames:
+    - $instance.$appsdomain
+    - manage.$instance.$appsdomain
+    - $workspace.manage.$instance.$appsdomain
+    - $workspace-all.manage.$instance.$appsdomain
+    - $workspace-cron.manage.$instance.$appsdomain
+    - $workspace-mea.manage.$instance.$appsdomain
+    - $workspace-rpt.manage.$instance.$appsdomain
+    - $workspace-ui.manage.$instance.$appsdomain
+    - maxinst.manage.$instance.$appsdomain
+EOF
+```
+
+Check status if letsencrypt solver Pods run successful
+
+```
+oc get pod -n $namespace --sort-by .metadata.creationTimestamp
+oc get route -n $namespace
+oc get cert letsencrypt-$instance-$workspace-cert-public-81 -n $namespace
+```
+
+Check certificates again
+
+```
+for host in $(oc get route -n $namespace -o jsonpath='{ ..spec.host }')
+do
+echo "------------------------------ $host ------------------------------"
+openssl s_client -connect $host:443 < /dev/null 2>/dev/null | \
+openssl x509 -noout -issuer -subject -enddate -ext subjectAltName
+done
+```
+
+```
+for route in  $(oc get route -n $namespace -o jsonpath='{ ..metadata.name }')
+do
+echo "------------------------------ $route ------------------------------"
+oc get route $route -n $namespace -o jsonpath='{ .spec.tls.certificate }' | \
+openssl x509 -noout -issuer -subject -enddate -ext subjectAltName
+done
+```
+
+```
+oc get secret -n $namespace \
+$instance-$workspace-cert-public-81 -o jsonpath='{ .data.tls\.crt }' | base64 -d | \
+openssl x509 -noout -issuer -subject -enddate -ext subjectAltName
+```
+
+Check that Routes respond with code 404, 301 or 302. A code 503 indicates a wrong ca certificate in the Ingress.
 
 ```
 for url in \
