@@ -19,7 +19,7 @@ The steps in this document describes to:
 
 All steps must be executed in both Namespaces mas-_instance_-core and mas-_instance_-manage except for the cluster resource ClusterIssuer.
 
-The scripts following creates the required ClusterIssuer, NetworkPolicy and Certificate. Provide the target Namespace name mas-_instance_-core and mas-_instance_-manage to the scripts.
+The scripts creates the required ClusterIssuer, NetworkPolicy and Certificate. Provide the target Namespace name mas-_instance_-core and mas-_instance_-manage to the scripts.
 
 ```
 ./crt_mas_core.sh mas-dev-core
