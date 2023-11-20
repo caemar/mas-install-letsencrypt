@@ -2,20 +2,22 @@
 
 In IBM Cloud the cert-manager with letsencrypt dns solver is not supported. Only the http solver is able to create signed certificates.
 
-Replace Routes with Ingress to allow using a letsencrypt ClusterIssuer to create signed certificates on Routes.
+This document describes to enable manual certificate management in MAS. The cert-manager will create letsencrypt Certificates that are stored in Secrets. MAS will then use the Certificates from the Secrets.
+
+https://www.ibm.com/docs/en/mas-cd/continuous-delivery?topic=management-manual-certificate
 
 The steps in this document describes to:
 - Create letsencrypt ClusterIssuer with http solver
 - Create NetworkPolicy to allow connections to cert-manager solver Pods
+- Enable manual certificate management (`spec.settings.manualCertMgmt` = `true`)
 - Create letsencrypt signed certificates that are stored in Secrets:
-  - Namespace mas-_instance_-core
-    - Secret _instance_-cert-public
-  - Namespace mas-_instance_-manage
-    - Secret _instance_-_workspace_-cert-public-81
+
+  Namespace | Secret
+  --------- | ------
+  mas-_instance_-core | _instance_-cert-public
+  mas-_instance_-manage | _instance_-_workspace_-cert-public-81
 
 All steps must be executed in both Namespaces mas-_instance_-core and mas-_instance_-manage except for the cluster resource ClusterIssuer.
-
-https://www.ibm.com/docs/en/mas-cd/continuous-delivery?topic=management-manual-certificate
 
 The scripts following creates the required ClusterIssuer, NetworkPolicy and Certificate. Provide the target Namespace name mas-_instance_-core and mas-_instance_-manage to the scripts.
 
@@ -80,7 +82,7 @@ EOF
 
 Note: Create the NetworkPolicy in both Namespaces.
 
-## In Namespace mas-_instance_-core
+## Create letsencrypt Certificates in Namespace mas-_instance_-core
 
 ```
 namespace=mas-dev-core
@@ -189,7 +191,7 @@ oc get secret \
 openssl x509 -noout -issuer -subject -enddate -ext subjectAltName
 ```
 
-Check that Routes respond with code 404, 301 or 302. A code 503 indicates a wrong ca certificate in the Ingress.
+Check that Routes respond with code 404, 301 or 302. A code 503 indicates a wrong ca certificate in the Route.
 
 ```
 for url in \
@@ -203,7 +205,7 @@ done
 
 Note: Run curl without -k to check signed certificate.
 
-## In Namespace mas-_instance_-manage
+## Create letsencrypt Certificates in Namespace mas-_instance_-manage
 
 ```
 namespace=mas-dev-manage
