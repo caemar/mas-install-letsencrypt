@@ -58,6 +58,8 @@ oc get secret \
 -n $namespace $instance-cert-public -o jsonpath='{ .data.tls\.crt }' | base64 -d | \
 openssl x509 -noout -issuer -subject -enddate -ext subjectAltName
 
+appsdomain=$(oc get ingresses.config/cluster -o jsonpath='{ .spec.domain }')
+
 cat << EOF | oc create -f -
 apiVersion: cert-manager.io/v1
 kind: Certificate
