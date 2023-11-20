@@ -97,6 +97,15 @@ workspace=$(oc get workspace -n $namespace \
 Check certificates
 
 ```
+for route in  $(oc get route -n $namespace -o jsonpath='{ ..metadata.name }')
+do
+echo "------------------------------ $route ------------------------------"
+oc get route $route -n $namespace -o jsonpath='{ .spec.tls.certificate }' | \
+openssl x509 -noout -issuer -enddate
+done
+```
+
+```
 for host in $(oc get route -n $namespace -o jsonpath='{ ..spec.host }')
 do
 echo "------------------------------ $host ------------------------------"
@@ -166,6 +175,15 @@ oc get cert letsencrypt-$instance-cert-public -n $namespace
 ```
 
 Check certificates again
+
+```
+for route in  $(oc get route -n $namespace -o jsonpath='{ ..metadata.name }')
+do
+echo "------------------------------ $route ------------------------------"
+oc get route $route -n $namespace -o jsonpath='{ .spec.tls.certificate }' | \
+openssl x509 -noout -issuer -enddate
+done
+```
 
 ```
 for host in $(oc get route -n $namespace -o jsonpath='{ ..spec.host }')
