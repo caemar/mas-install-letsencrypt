@@ -26,8 +26,15 @@ The scripts creates the required ClusterIssuer, NetworkPolicy and Certificate. P
 
 ```
 ./crt_mas_core.sh mas-dev-core
+```
+
+```
 ./crt_mas_manage.sh mas-dev-manage
 ```
+
+Note: The first time using letscrypt on a new domain might show a rate limit error: Failed to create Order: 429 urn:ietf:params:acme:error:rateLimited: Error creating new order :: too many certificates (5) already issued for this exact set of domains in the last 168 hours, see https://letsencrypt.org/docs/duplicate-certificate-limit/
+
+Note: The subject CN in a certificate has a 63 character limit. Therefor always add a short (less than 63 characters) DNS name in the first entry in the `dnsNames` list followed by one or more long DNS names. The first DNS name will become the Subject CN name in the certificate.
 
 ## Create letsencrypt ClusterIssuer
 
@@ -145,6 +152,49 @@ https://www.ibm.com/docs/en/mas-cd/continuous-delivery?topic=management-manual-c
 
 https://www.ibm.com/docs/en/mas-cd/continuous-delivery?topic=management-uploading-public-certificates-in-red-hat-openshift
 
+Note: Create different certificates to avoid letsencrypt rate limit.
+
+```yaml
+appsdomain=$(oc get ingresses.config/cluster -o jsonpath='{ .spec.domain }')
+
+for certname in admin api auth home
+do
+
+cat << EOF | oc create -f -
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: letsencrypt-$instance-cert-public-$certname
+  namespace: $namespace
+spec:
+  secretName: $instance-cert-public-$certname
+  issuerRef:
+    name: letsencrypt
+    kind: ClusterIssuer
+  dnsNames:
+    - $instance.$appsdomain
+    - $certname.$instance.$appsdomain
+EOF
+
+done
+
+cat << EOF | oc create -f -
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: letsencrypt-$instance-cert-public-$workspace-home
+  namespace: $namespace
+spec:
+  secretName: $instance-cert-public-$workspace-home
+  issuerRef:
+    name: letsencrypt
+    kind: ClusterIssuer
+  dnsNames:
+    - $instance.$appsdomain
+    - $workspace.home.$instance.$appsdomain
+EOF
+```
+
 ```yaml
 appsdomain=$(oc get ingresses.config/cluster -o jsonpath='{ .spec.domain }')
 
@@ -235,12 +285,20 @@ namespace=mas-dev-manage
 ```
 instance=$(echo $namespace | cut -d"-" -f2)
 workspace=$(oc get pod -n $namespace \
-            -l mas.ibm.com/appTypeName=all \
-            -o jsonpath='{ .items[].metadata.labels.mas\.ibm\.com/workspaceId }')
-
+            -o jsonpath='{ .items[*].metadata.labels.mas\.ibm\.com/workspaceId }' \
+            | awk '{ print $1 }')
 ```
 
 Check certificates
+
+```
+for route in  $(oc get route -n $namespace -o jsonpath='{ ..metadata.name }')
+do
+echo "------------------------------ $route ------------------------------"
+oc get route $route -n $namespace -o jsonpath='{ .spec.tls.certificate }' | \
+openssl x509 -noout -issuer -enddate
+done
+```
 
 ```
 for host in $(oc get route -n $namespace -o jsonpath='{ ..spec.host }')
@@ -300,6 +358,15 @@ oc get cert letsencrypt-$instance-$workspace-cert-public-81 -n $namespace
 ```
 
 Check certificates again
+
+```
+for route in  $(oc get route -n $namespace -o jsonpath='{ ..metadata.name }')
+do
+echo "------------------------------ $route ------------------------------"
+oc get route $route -n $namespace -o jsonpath='{ .spec.tls.certificate }' | \
+openssl x509 -noout -issuer -enddate
+done
+```
 
 ```
 for host in $(oc get route -n $namespace -o jsonpath='{ ..spec.host }')

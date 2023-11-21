@@ -60,6 +60,43 @@ openssl x509 -noout -issuer -subject -enddate -ext subjectAltName
 
 appsdomain=$(oc get ingresses.config/cluster -o jsonpath='{ .spec.domain }')
 
+for certname in admin api auth home
+do
+
+cat << EOF | oc create -f -
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: letsencrypt-$instance-cert-public-$certname
+  namespace: $namespace
+spec:
+  secretName: $instance-cert-public-$certname
+  issuerRef:
+    name: letsencrypt
+    kind: ClusterIssuer
+  dnsNames:
+    - $instance.$appsdomain
+    - $certname.$instance.$appsdomain
+EOF
+
+done
+
+cat << EOF | oc create -f -
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: letsencrypt-$instance-cert-public-$workspace-home
+  namespace: $namespace
+spec:
+  secretName: $instance-cert-public-$workspace-home
+  issuerRef:
+    name: letsencrypt
+    kind: ClusterIssuer
+  dnsNames:
+    - $instance.$appsdomain
+    - $workspace.home.$instance.$appsdomain
+EOF
+
 cat << EOF | oc create -f -
 apiVersion: cert-manager.io/v1
 kind: Certificate

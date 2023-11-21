@@ -13,8 +13,8 @@ echo
 instance=$(echo $namespace | cut -d"-" -f2)
 
 workspace=$(oc get pod -n $namespace \
-            -l mas.ibm.com/appTypeName=all \
-            -o jsonpath='{ .items[].metadata.labels.mas\.ibm\.com/workspaceId }')
+            -o jsonpath='{ .items[*].metadata.labels.mas\.ibm\.com/workspaceId }' \
+            | awk '{ print $1 }')
 
 cat << EOF | oc create -f - 2>/dev/null
 kind: NetworkPolicy
