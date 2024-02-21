@@ -42,11 +42,50 @@ openssl x509 -noout -issuer -subject -enddate -ext subjectAltName
 
 appsdomain=$(oc get ingresses.config/cluster -o jsonpath='{ .spec.domain }')
 
+for certname in \
+$workspace $workspace-all $workspace-cron $workspace-mea $workspace-rpt $workspace-ui
+do
+
 cat << EOF | oc create -f -
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
-  name: letsencrypt-$instance-$workspace-cert-public-81
+  name: $instance-$workspace-cert-public-81-$certname
+  namespace: $namespace
+spec:
+  secretName: $instance-$workspace-cert-public-81-$certname
+  issuerRef:
+    name: letsencrypt
+    kind: ClusterIssuer
+  dnsNames:
+    - $instance.$appsdomain
+    - $certname.manage.$instance.$appsdomain
+EOF
+
+done
+
+cat << EOF | oc create -f -
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: $instance-$workspace-cert-public-81-$workspace-manage
+  namespace: $namespace
+spec:
+  secretName: $instance-$workspace-cert-public-81-$workspace-manage
+  issuerRef:
+    name: letsencrypt
+    kind: ClusterIssuer
+  dnsNames:
+    - $instance.$appsdomain
+    - manage.$instance.$appsdomain
+    - maxinst.manage.$instance.$appsdomain
+EOF
+
+cat << EOF | oc create -f -
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: $instance-$workspace-cert-public-81
   namespace: $namespace
 spec:
   secretName: $instance-$workspace-cert-public-81
@@ -65,8 +104,8 @@ spec:
     - maxinst.manage.$instance.$appsdomain
 EOF
 
-oc get cert letsencrypt-$instance-$workspace-cert-public-81 -n $namespace
+oc get cert $instance-$workspace-cert-public-81 -n $namespace
 
 echo
 echo Check Certificate with
-echo oc get cert letsencrypt-$instance-$workspace-cert-public-81 -n $namespace
+echo oc get cert $instance-$workspace-cert-public-81 -n $namespace
