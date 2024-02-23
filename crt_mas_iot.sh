@@ -12,7 +12,7 @@ echo
 
 instance=$(echo $namespace | cut -d"-" -f2)
 
-workspace=$(oc get pod -n $namespace \
+workspace=$(oc get iotworkspace -n $namespace \
             -o jsonpath='{ .items[*].metadata.labels.mas\.ibm\.com/workspaceId }' \
             | awk '{ print $1 }')
 
