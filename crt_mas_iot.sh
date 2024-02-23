@@ -46,7 +46,7 @@ for certname in \
 iot $workspace.iot $workspace.messaging.iot messaging.iot \
 edgeconfig.iot edgeconfigapi.iot $workspace.edgeconfig.iot $workspace.edgeconfigapi.iot
 do
-name=$(echo $certname | sed "s/./-/g")
+name=$(echo $certname | sed "s/\./-/g")
 
 cat << EOF | oc create -f -
 apiVersion: cert-manager.io/v1
