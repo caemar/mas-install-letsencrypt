@@ -42,6 +42,29 @@ openssl x509 -noout -issuer -subject -enddate -ext subjectAltName
 
 appsdomain=$(oc get ingresses.config/cluster -o jsonpath='{ .spec.domain }')
 
+for certname in \
+$workspace.predict predict
+do
+name=$(echo $certname | sed "s/\./-/g")
+
+cat << EOF | oc create -f -
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: letsencrypt-$instance-public-tls-$name
+  namespace: $namespace
+spec:
+  secretName: $instance-public-tls-$name
+  issuerRef:
+    name: letsencrypt
+    kind: ClusterIssuer
+  dnsNames:
+    - $instance.$appsdomain
+    - $certname.$instance.$appsdomain
+EOF
+
+done
+
 cat << EOF | oc create -f -
 apiVersion: cert-manager.io/v1
 kind: Certificate
