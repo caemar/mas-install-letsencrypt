@@ -94,3 +94,10 @@ oc get cert $instance-public-tls -n $namespace
 echo
 echo Check Certificate with
 echo oc get cert letsencrypt-$instance-public-tls -n $namespace
+
+# oc wait --for jsonpath={.status.conditions[0].status}=True \
+# cert/letsencrypt-$instance-public-tls -n $namespace
+
+oc set data secret/$instance-public-tls \
+-n $namespace \
+--from-file ca.crt=isrgrootx1.pem

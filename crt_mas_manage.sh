@@ -109,3 +109,10 @@ oc get cert letsencrypt-$instance-$workspace-cert-public-81 -n $namespace
 echo
 echo Check Certificate with
 echo oc get cert letsencrypt-$instance-$workspace-cert-public-81 -n $namespace
+
+# oc wait --for jsonpath={.status.conditions[0].status}=True \
+# cert/letsencrypt-$instance-$workspace-cert-public-81 -n $namespace
+
+oc set data secret/$instance-$workspace-cert-public-81 \
+-n $namespace \
+--from-file ca.crt=isrgrootx1.pem
