@@ -62,15 +62,16 @@ appsdomain=$(oc get ingresses.config/cluster -o jsonpath='{ .spec.domain }')
 
 for certname in admin api auth home
 do
+name=$(echo $certname | sed "s/\./-/g")
 
 cat << EOF | oc create -f -
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
-  name: letsencrypt-$instance-cert-public-$certname
+  name: letsencrypt-$name
   namespace: $namespace
 spec:
-  secretName: $instance-cert-public-$certname
+  secretName: letsencrypt-$name
   issuerRef:
     name: letsencrypt
     kind: ClusterIssuer
@@ -79,16 +80,19 @@ spec:
     - $certname.$instance.$appsdomain
 EOF
 
+oc wait --for jsonpath={.status.conditions[0].status}=True \
+cert/letsencrypt-$name -n $namespace
+
 done
 
 cat << EOF | oc create -f -
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
-  name: letsencrypt-$instance-cert-public-$workspace-home
+  name: letsencrypt-$workspace-home
   namespace: $namespace
 spec:
-  secretName: $instance-cert-public-$workspace-home
+  secretName: letsencrypt-$workspace-home
   issuerRef:
     name: letsencrypt
     kind: ClusterIssuer
@@ -122,3 +126,10 @@ oc get cert letsencrypt-$instance-cert-public -n $namespace
 echo
 echo Check Certificate with
 echo oc get cert letsencrypt-$instance-cert-public -n $namespace
+
+oc delete cert -n $namespace \
+letsencrypt-$workspace-home \
+letsencrypt-admin \
+letsencrypt-api \
+letsencrypt-auth \
+letsencrypt-home
