@@ -122,7 +122,7 @@ cat <<EOF
 Check route certificates
 
 for url in \
-$(oc get route -n $namespace \
+\$(oc get route -n $namespace \
 -o jsonpath='{ range @.items[*] }{ .spec.host }{ .spec.path } { end }')
 do
   curl https://\$url -o /dev/null -s -w '%{http_code} '
