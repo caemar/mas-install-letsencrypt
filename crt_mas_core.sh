@@ -60,7 +60,7 @@ openssl x509 -noout -issuer -subject -enddate -ext subjectAltName
 
 appsdomain=$(oc get ingresses.config/cluster -o jsonpath='{ .spec.domain }')
 
-for certname in admin api auth home
+for certname in admin api auth home $workspace.home
 do
 name=$(echo $certname | sed "s/\./-/g")
 
@@ -81,25 +81,9 @@ spec:
 EOF
 
 oc wait --for jsonpath={.status.conditions[0].status}=True \
-cert/letsencrypt-$name -n $namespace
+cert/letsencrypt-$name -n $namespace --timeout=120s
 
 done
-
-cat << EOF | oc create -f -
-apiVersion: cert-manager.io/v1
-kind: Certificate
-metadata:
-  name: letsencrypt-$workspace-home
-  namespace: $namespace
-spec:
-  secretName: letsencrypt-$workspace-home
-  issuerRef:
-    name: letsencrypt
-    kind: ClusterIssuer
-  dnsNames:
-    - $instance.$appsdomain
-    - $workspace.home.$instance.$appsdomain
-EOF
 
 cat << EOF | oc create -f -
 apiVersion: cert-manager.io/v1
@@ -133,3 +117,15 @@ letsencrypt-admin \
 letsencrypt-api \
 letsencrypt-auth \
 letsencrypt-home
+
+cat <<EOF
+Check route certificates
+
+for url in \
+$(oc get route -n $namespace \
+-o jsonpath='{ range @.items[*] }{ .spec.host }{ .spec.path } { end }')
+do
+  curl https://\$url -o /dev/null -s -w '%{http_code} '
+  echo https://\$url
+done
+EOF
