@@ -7,9 +7,17 @@ if [ "x$namespace" = "x"  ]; then
     exit 1
 fi
 
-instance=$(echo $namespace | cut -d"-" -f2)
+instance=$(oc get workspace -n $namespace \
+            -o jsonpath='{ ..metadata.labels.mas\.ibm\.com/instanceId }')
 workspace=$(oc get workspace -n $namespace \
             -o jsonpath='{ ..metadata.labels.mas\.ibm\.com/workspaceId }')
+
+if [ -z "$instance" ]; then
+  echo "ERROR: Wrong Namespace $namespace"
+  echo "MAS Core not installed in Namespace $namespace"
+  oc get Suite -A
+  exit 1
+fi
 
 echo "Creating letsencrypt signed certificate in Namespace $namespace"
 echo

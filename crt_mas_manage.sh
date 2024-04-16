@@ -10,11 +10,19 @@ fi
 echo "Creating letsencrypt signed certificate in Namespace $namespace"
 echo
 
-instance=$(echo $namespace | cut -d"-" -f2)
+instance=$(oc get ManageWorkspace -n $namespace \
+            -o jsonpath='{ ..metadata.labels.mas\.ibm\.com/instanceId }')
 
 workspace=$(oc get ManageWorkspace -n $namespace \
             -o jsonpath='{ .items[*].metadata.labels.mas\.ibm\.com/workspaceId }' \
             | awk '{ print $1 }')
+
+if [ -z "$instance" ]; then
+  echo "ERROR: Wrong Namespace $namespace"
+  echo "MAS Manage not installed in Namespace $namespace"
+  oc get ManageWorkspace -A
+  exit 1
+fi
 
 cat << EOF | oc create -f - 2>/dev/null
 kind: NetworkPolicy
