@@ -357,6 +357,18 @@ oc get route -n $namespace
 oc get cert letsencrypt-$instance-$workspace-cert-public-81 -n $namespace
 ```
 
+Add letsencrypt root CA ca.crt to secret.
+
+```
+curl -LO https://letsencrypt.org/certs/isrgrootx1.pem
+```
+
+```
+oc set data secret/$instance-$workspace-cert-public-81 \
+-n $namespace \
+--from-file ca.crt=isrgrootx1.pem
+```
+
 Check certificates again
 
 ```
