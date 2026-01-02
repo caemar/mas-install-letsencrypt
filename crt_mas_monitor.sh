@@ -42,29 +42,6 @@ openssl x509 -noout -issuer -subject -enddate -ext subjectAltName
 
 appsdomain=$(oc get ingresses.config/cluster -o jsonpath='{ .spec.domain }')
 
-for certname in \
-monitor admin.monitor api.monitor $workspace.monitor $workspace.api.monitor
-do
-name=$(echo $certname | sed "s/\./-/g")
-
-cat << EOF | oc create -f -
-apiVersion: cert-manager.io/v1
-kind: Certificate
-metadata:
-  name: letsencrypt-$instance-public-tls-$name
-  namespace: $namespace
-spec:
-  secretName: $instance-public-tls-$name
-  issuerRef:
-    name: letsencrypt
-    kind: ClusterIssuer
-  dnsNames:
-    - $instance.$appsdomain
-    - $certname.$instance.$appsdomain
-EOF
-
-done
-
 cat << EOF | oc create -f -
 apiVersion: cert-manager.io/v1
 kind: Certificate
@@ -73,6 +50,8 @@ metadata:
   namespace: $namespace
 spec:
   secretName: $instance-public-tls
+  privateKey:
+    rotationPolicy: Always
   issuerRef:
     name: letsencrypt
     kind: ClusterIssuer
@@ -85,15 +64,30 @@ spec:
     - $workspace.api.monitor.$instance.$appsdomain
 EOF
 
+oc wait --for jsonpath={.status.conditions[0].status}=True \
+cert/letsencrypt-$instance-public-tls -n $namespace
+
 oc get cert letsencrypt-$instance-public-tls -n $namespace
 
 echo
 echo Check Certificate with
 echo oc get cert letsencrypt-$instance-public-tls -n $namespace
 
-# oc wait --for jsonpath={.status.conditions[0].status}=True \
-# cert/letsencrypt-$instance-public-tls -n $namespace
+oc wait --for jsonpath={.status.conditions[0].status}=True \
+cert/letsencrypt-$instance-public-tls -n $namespace
 
 oc set data secret/$instance-public-tls \
 -n $namespace \
 --from-file ca.crt=isrgrootx1.pem
+
+cat <<EOF
+Check route certificates
+
+for url in \
+\$(oc get route -n $namespace \
+-o jsonpath='{ range @.items[*] }{ .spec.host }{ .spec.path } { end }')
+do
+  curl https://\$url -o /dev/null -s -w '%{http_code} '
+  echo https://\$url
+done
+EOF

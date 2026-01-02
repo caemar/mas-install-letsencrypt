@@ -68,31 +68,6 @@ openssl x509 -noout -issuer -subject -enddate -ext subjectAltName
 
 appsdomain=$(oc get ingresses.config/cluster -o jsonpath='{ .spec.domain }')
 
-for certname in admin api auth home $workspace.home
-do
-name=$(echo $certname | sed "s/\./-/g")
-
-cat << EOF | oc create -f -
-apiVersion: cert-manager.io/v1
-kind: Certificate
-metadata:
-  name: letsencrypt-$name
-  namespace: $namespace
-spec:
-  secretName: letsencrypt-$name
-  issuerRef:
-    name: letsencrypt
-    kind: ClusterIssuer
-  dnsNames:
-    - $instance.$appsdomain
-    - $certname.$instance.$appsdomain
-EOF
-
-oc wait --for jsonpath={.status.conditions[0].status}=True \
-cert/letsencrypt-$name -n $namespace --timeout=120s
-
-done
-
 cat << EOF | oc create -f -
 apiVersion: cert-manager.io/v1
 kind: Certificate
@@ -101,6 +76,8 @@ metadata:
   namespace: $namespace
 spec:
   secretName: $instance-cert-public
+  privateKey:
+    rotationPolicy: Always
   issuerRef:
     name: letsencrypt
     kind: ClusterIssuer
@@ -113,18 +90,14 @@ spec:
     - $workspace.home.$instance.$appsdomain
 EOF
 
+oc wait --for jsonpath={.status.conditions[0].status}=True \
+cert/letsencrypt-$instance-cert-public -n $namespace
+
 oc get cert letsencrypt-$instance-cert-public -n $namespace
 
 echo
 echo Check Certificate with
 echo oc get cert letsencrypt-$instance-cert-public -n $namespace
-
-oc delete cert -n $namespace \
-letsencrypt-$workspace-home \
-letsencrypt-admin \
-letsencrypt-api \
-letsencrypt-auth \
-letsencrypt-home
 
 cat <<EOF
 Check route certificates

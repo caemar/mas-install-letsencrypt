@@ -12,7 +12,7 @@ echo
 
 instance=$(echo $namespace | cut -d"-" -f2)
 
-workspace=$(oc get PredictWorkspace -n $namespace \
+workspace=$(oc get ArcGISWorkspace -n $namespace \
             -o jsonpath='{ .items[*].metadata.labels.mas\.ibm\.com/workspaceId }' \
             | awk '{ print $1 }')
 
@@ -36,7 +36,7 @@ spec:
 EOF
 
 oc get secret \
--n $namespace $instance-public-predict-tls \
+-n $namespace arcgis-ingress-cert-pem \
 -o jsonpath='{ .data.tls\.crt }' | base64 -d | \
 openssl x509 -noout -issuer -subject -enddate -ext subjectAltName
 
@@ -46,10 +46,10 @@ cat << EOF | oc create -f -
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
-  name: letsencrypt-$instance-public-predict-tls
+  name: letsencrypt-arcgis-ingress-cert-pem
   namespace: $namespace
 spec:
-  secretName: $instance-public-predict-tls
+  secretName: arcgis-ingress-cert-pem
   privateKey:
     rotationPolicy: Always
   issuerRef:
@@ -57,31 +57,19 @@ spec:
     kind: ClusterIssuer
   dnsNames:
     - $instance.$appsdomain
-    - $workspace.predict.$instance.$appsdomain
-    - predict.$instance.$appsdomain
+    - visualinspection.$instance.$appsdomain
+    - $workspace.visualinspection.$instance.$appsdomain
 EOF
 
-oc get cert letsencrypt-$instance-public-predict-tls -n $namespace
+oc get cert arcgis-ingress-cert-pem -n $namespace
 
 echo
 echo Check Certificate with
-echo oc get cert letsencrypt-$instance-public-predict-tls -n $namespace
+echo oc get cert letsencrypt-arcgis-ingress-cert-pem -n $namespace
 
 oc wait --for jsonpath={.status.conditions[0].status}=True \
-cert/letsencrypt-$instance-public-predict-tls -n $namespace
+cert/letsencrypt-arcgis-ingress-cert-pem -n $namespace
 
-oc set data secret/$instance-public-predict-tls \
+oc set data secret/arcgis-ingress-cert-pem \
 -n $namespace \
 --from-file ca.crt=isrgrootx1.pem
-
-cat <<EOF
-Check route certificates
-
-for url in \
-\$(oc get route -n $namespace \
--o jsonpath='{ range @.items[*] }{ .spec.host }{ .spec.path } { end }')
-do
-  curl https://\$url -o /dev/null -s -w '%{http_code} '
-  echo https://\$url
-done
-EOF

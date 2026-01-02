@@ -4,8 +4,8 @@ In IBM Cloud the cert-manager with letsencrypt dns solver is not supported. Only
 
 This document describes to enable manual certificate management in MAS. The cert-manager will create letsencrypt Certificates that are stored in Secrets. MAS will then use the Certificates from the Secrets.
 
-- MAS version: 8.11.2
-- OpenShift version: 4.12
+- MAS version: 9.1.6 (Catalog v9-251127-amd64)
+- OpenShift version: 4.18
 
 https://www.ibm.com/docs/en/mas-cd/continuous-delivery?topic=management-manual-certificate
 
@@ -19,10 +19,13 @@ This document describes to:
   --------- | ------
   mas-_instance_-core | _instance_-cert-public
   mas-_instance_-manage | _instance_-_workspace_-cert-public-81
+  mas-_instance_-facilities | _instance_-_workspace_-public-facilities-tls
 
 All steps must be executed in both Namespaces mas-_instance_-core and mas-_instance_-manage except for the cluster resource ClusterIssuer.
 
 The scripts creates the required ClusterIssuer, NetworkPolicy and Certificate. Provide the target Namespace name mas-_instance_-core and mas-_instance_-manage to the scripts.
+
+Example _instance_ = `dev`
 
 ```
 ./crt_mas_core.sh mas-dev-core
@@ -30,6 +33,22 @@ The scripts creates the required ClusterIssuer, NetworkPolicy and Certificate. P
 
 ```
 ./crt_mas_manage.sh mas-dev-manage
+```
+
+```
+./crt_mas_facilities.sh mas-dev-facilities
+```
+
+```
+./crt_mas_monitor.sh mas-dev-monitor
+```
+
+```
+./crt_mas_visualinspection.sh mas-dev-visualinspection
+```
+
+```
+./crt_mas_iot.sh mas-dev-iot
 ```
 
 Note: The first time using letscrypt on a new domain might show a rate limit error: Failed to create Order: 429 urn:ietf:params:acme:error:rateLimited: Error creating new order :: too many certificates (5) already issued for this exact set of domains in the last 168 hours, see https://letsencrypt.org/docs/duplicate-certificate-limit/
@@ -346,6 +365,7 @@ spec:
     - $workspace-rpt.manage.$instance.$appsdomain
     - $workspace-ui.manage.$instance.$appsdomain
     - maxinst.manage.$instance.$appsdomain
+    - $workspace-foundation.manage.$instance.$appsdomain
 EOF
 ```
 
@@ -417,3 +437,28 @@ done
 ```
 
 Note: Run curl without -k to check signed certificate.
+
+## Troubleshooting letsencrypt certs
+
+```
+openssl verify -untrusted chain.pem cert.pem
+```
+
+With `chain.pem` the intermediate certificates and `cert.pem` the certificate.
+
+```
+openssl crl2pkcs7 -nocrl -certfile chain.pem | openssl pkcs7 -print_certs -noout
+```
+
+```
+while openssl x509 -noout -issuer -subject -dates; do :; done < chain.pem 2>/dev/null
+```
+
+Download `chain.pem` letsencrypt intermediate CAs
+
+https://letsencrypt.org/certificates/
+
+```
+curl https://letsencrypt.org/certs/2024/r12.pem >  chain.pem
+curl https://letsencrypt.org/certs/2024/r13.pem >> chain.pem
+```
